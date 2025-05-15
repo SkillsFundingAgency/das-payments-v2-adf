@@ -83,7 +83,7 @@ stages:
 - stage: Deploy_MO
   dependsOn: 
   - Publish_ADF
-  - Deploy_SDW
+  - Deploy_SIT
   displayName: Deploy to MO
   variables:
   - name: tagEnvironment
