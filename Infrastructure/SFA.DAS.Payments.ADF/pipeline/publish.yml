@@ -5,9 +5,12 @@ jobs:
     name: DCT Build Pool
     demands:
     - IsBuildServerDas
-    workspace:
-      clean: all
+  workspace:
+    clean: all
   steps:
+  - checkout: self
+    clean: true
+
   #- task: gittools.gitversion.gitversion-task.GitVersion@5
   - task: gitversion/setup@0
     displayName: GitVersion
@@ -15,18 +18,56 @@ jobs:
       updateAssemblyInfo: true
       versionSpec: '5.x'
 
-  - task: CopyFiles@2
-    displayName: 'Copy Files to: $(build.artifactstagingdirectory)'
+  # ADF automated publishing requires Node.js 20.x.
+  - task: UseNode@1
+    displayName: Use Node.js 20.x
     inputs:
+      version: '20.x'
+
+  # Keep the authoring/source factory resource ID outside the YAML so this
+  # publish job is not tied to MO (or any other environment). Define
+  # ADFSourceFactoryResourceId in an existing pipeline/variable group.
+  - task: PowerShell@2
+    displayName: Validate ADF source factory setting
+    inputs:
+      targetType: inline
+      script: |
+        $factoryId = '$(ADFSourceFactoryResourceId)'
+        if ([string]::IsNullOrWhiteSpace($factoryId) -or $factoryId -eq '$(ADFSourceFactoryResourceId)') {
+          throw 'ADFSourceFactoryResourceId is not defined. Add it to the pipeline or an existing variable group.'
+        }
+        Write-Host "Using configured ADF source factory resource ID for validation/export."
+
+  - task: Npm@1
+    displayName: Install ADF utilities
+    inputs:
+      command: 'install'
+      workingDir: '$(Build.Repository.LocalPath)/Infrastructure/SFA.DAS.Payments.ADF'
+      verbose: true
+
+  # The /adf folder is the Git-authoring source. This export validates it and
+  # creates the ARM template that is then deployed to DAS/DST/SIT/MO/PD.
+  - task: Npm@1
+    displayName: Validate and generate ADF ARM template
+    inputs:
+      command: 'custom'
+      workingDir: '$(Build.Repository.LocalPath)/Infrastructure/SFA.DAS.Payments.ADF'
+      customCommand: 'run build export "$(Build.Repository.LocalPath)/Infrastructure/SFA.DAS.Payments.ADF/adf" "$(ADFSourceFactoryResourceId)" "ArmTemplate"'
+
+  - task: CopyFiles@2
+    displayName: 'Copy files to artifact staging directory'
+    inputs:
+      SourceFolder: '$(Build.Repository.LocalPath)'
       Contents: |
         Infrastructure/SFA.DAS.Payments.ADF/azure/**
         Infrastructure/SFA.DAS.Payments.ADF/scripts/**
-        Infrastructure/SFA.DAS.Payments.ADF/DCOL-DAS-DataFactoryDAS-WEU/**
+        Infrastructure/SFA.DAS.Payments.ADF/ArmTemplate/**
         das-at-dfac-df/**
-      TargetFolder: '$(build.artifactstagingdirectory)/publish'
+      TargetFolder: '$(Build.ArtifactStagingDirectory)/publish'
       OverWrite: true
 
   - task: PublishBuildArtifacts@1
     displayName: 'Publish Artifact'
     inputs:
-      PathtoPublish: '$(build.artifactstagingdirectory)/publish'
+      PathtoPublish: '$(Build.ArtifactStagingDirectory)/publish'
+      ArtifactName: 'drop'

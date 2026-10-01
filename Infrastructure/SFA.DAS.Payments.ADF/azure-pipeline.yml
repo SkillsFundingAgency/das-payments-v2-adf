@@ -1,4 +1,7 @@
 variables:
+# Required by pipeline/publish.yml. Define ADFSourceFactoryResourceId in one of
+# the variable groups below (recommended: Common - Project Level). It should
+# identify the single ADF authoring/source factory used to validate/export /adf.
 - group: Common - Project Level
 - group: Common - Connection String
 - group: Common - Database Names
@@ -12,7 +15,7 @@ resources:
 trigger:
   branches:
     include:
-    - master
+    - main
   batch: true
   paths:
     include:
