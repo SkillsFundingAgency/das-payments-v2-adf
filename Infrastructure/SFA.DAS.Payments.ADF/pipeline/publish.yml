@@ -1,61 +1,64 @@
-variables:
-- group: Common - Project Level
-
 jobs:
 - job: publishAdfFiles
-  displayName: Publish ADF Files
+  displayName: 'Publish ADF Files'
+
+  # Explicitly load the variable group in this job/template.
+  variables:
+  - group: 'Common - Project Level'
+
   pool:
-    name: DCT Build Pool
+    name: 'DCT Build Pool'
     demands:
     - IsBuildServerDas
+
   workspace:
     clean: all
+
   steps:
   - checkout: self
     clean: true
 
-  #- task: gittools.gitversion.gitversion-task.GitVersion@5
   - task: gitversion/setup@0
-    displayName: GitVersion
+    displayName: 'GitVersion'
     inputs:
       updateAssemblyInfo: true
       versionSpec: '5.x'
 
-  # ADF automated publishing requires Node.js 20.x.
   - task: UseNode@1
-    displayName: Use Node.js 20.x
+    displayName: 'Use Node.js 20.x'
     inputs:
       version: '20.x'
 
-  # Keep the authoring/source factory resource ID outside the YAML so this
-  # publish job is not tied to MO (or any other environment). Define
-  # ADFSourceFactoryResourceId in an existing pipeline/variable group.
   - task: PowerShell@2
-    displayName: Validate ADF source factory setting
+    displayName: 'Validate ADF source factory setting'
+    env:
+      ADF_SOURCE_FACTORY_RESOURCE_ID: $(ADFSourceFactoryResourceId)
     inputs:
-      targetType: inline
+      targetType: 'inline'
       script: |
-        $factoryId = '$(ADFSourceFactoryResourceId)'
-        if ([string]::IsNullOrWhiteSpace($factoryId) -or $factoryId -eq '$(ADFSourceFactoryResourceId)') {
-          throw 'ADFSourceFactoryResourceId is not defined. Add it to the pipeline or an existing variable group.'
+        $ErrorActionPreference = 'Stop'
+        $factoryId = $env:ADF_SOURCE_FACTORY_RESOURCE_ID
+
+        if ([string]::IsNullOrWhiteSpace($factoryId)) {
+          throw 'ADFSourceFactoryResourceId is not defined or is empty in variable group Common - Project Level.'
         }
-        Write-Host "Using configured ADF source factory resource ID for validation/export."
+
+        Write-Host 'ADFSourceFactoryResourceId has been loaded successfully.'
+        Write-Host "##vso[task.setvariable variable=ResolvedADFSourceFactoryResourceId]$factoryId"
 
   - task: Npm@1
-    displayName: Install ADF utilities
+    displayName: 'Install ADF utilities'
     inputs:
       command: 'install'
       workingDir: '$(Build.Repository.LocalPath)/Infrastructure/SFA.DAS.Payments.ADF'
       verbose: true
 
-  # The /adf folder is the Git-authoring source. This export validates it and
-  # creates the ARM template that is then deployed to DAS/DST/SIT/MO/PD.
   - task: Npm@1
-    displayName: Validate and generate ADF ARM template
+    displayName: 'Validate and generate ADF ARM template'
     inputs:
       command: 'custom'
       workingDir: '$(Build.Repository.LocalPath)/Infrastructure/SFA.DAS.Payments.ADF'
-      customCommand: 'run build export "$(Build.Repository.LocalPath)/Infrastructure/SFA.DAS.Payments.ADF/adf" "$(ADFSourceFactoryResourceId)" "ArmTemplate"'
+      customCommand: 'run build export "$(Build.Repository.LocalPath)/Infrastructure/SFA.DAS.Payments.ADF/adf" "$(ResolvedADFSourceFactoryResourceId)" "ArmTemplate"'
 
   - task: CopyFiles@2
     displayName: 'Copy files to artifact staging directory'
