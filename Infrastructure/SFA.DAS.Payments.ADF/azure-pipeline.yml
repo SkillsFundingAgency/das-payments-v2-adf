@@ -23,9 +23,10 @@ trigger:
     exclude:
     - Infrastructure/SFA.DAS.Payments.Monitoring.Metrics
 
-stages:
 - stage: Publish_ADF
   displayName: Publish ADF
+  variables:
+  - group: Common - Project Level
 
   jobs:
   - template: pipeline/publish.yml
