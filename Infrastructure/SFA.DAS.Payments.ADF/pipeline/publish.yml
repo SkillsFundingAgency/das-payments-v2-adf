@@ -1,3 +1,6 @@
+variables:
+- group: Common - Project Level
+
 jobs:
 - job: publishAdfFiles
   displayName: Publish ADF Files
