@@ -1,0 +1,29 @@
+{
+    "name": "CleanupRedundantOperationalData_Schedule",
+    "properties": {
+        "annotations": [],
+        "runtimeState": "Started",
+        "pipelines": [
+                {
+                    "pipelineReference": {
+                        "referenceName": "CleanupRedundantOperationalData",
+                        "type": "PipelineReference"
+                    }
+                }
+        ],
+        "type": "ScheduleTrigger",
+        "typeProperties": {
+            "recurrence": {
+                "frequency": "Day",
+                "interval": 1,
+                "startTime": "2026-10-09T22:30:00Z",
+                "timeZone": "GMT Standard Time",
+                "schedule": {
+                    "minutes": [30],
+                    "hours": [22]
+                }
+            }
+        }
+    },
+    "type": "Microsoft.DataFactory/factories/triggers"
+}
