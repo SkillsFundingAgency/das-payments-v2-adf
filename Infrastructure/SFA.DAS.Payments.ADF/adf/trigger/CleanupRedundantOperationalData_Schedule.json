@@ -16,7 +16,7 @@
             "recurrence": {
                 "frequency": "Day",
                 "interval": 1,
-                "startTime": "2026-10-09T22:30:00Z",
+                "startTime": "2026-10-09T22:30:00",
                 "timeZone": "GMT Standard Time",
                 "schedule": {
                     "minutes": [30],

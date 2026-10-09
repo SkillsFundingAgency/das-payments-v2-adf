@@ -256,16 +256,20 @@
         },
         "parameters": {
             "CurrentCollectionPeriod": {
-                "type": "string"
+                "type": "string",
+                "defaultValue": ""
             },
             "CurrentAcademicYear": {
-                "type": "string"
+                "type": "string",
+                "defaultValue": ""
             },
             "PreviousCollectionPeriod": {
-                "type": "string"
+                "type": "string",
+                "defaultValue": ""
             },
             "PreviousAcademicYear": {
-                "type": "string"
+                "type": "string",
+                "defaultValue": ""
             }
         },
         "annotations": [],
