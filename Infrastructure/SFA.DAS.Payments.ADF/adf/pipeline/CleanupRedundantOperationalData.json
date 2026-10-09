@@ -1,7 +1,6 @@
 {
-    "name": "[concat(parameters('factoryName'), '/CleanupRedundantOperationalData')]",
+    "name": "CleanupRedundantOperationalData",
     "type": "Microsoft.DataFactory/factories/pipelines",
-    "apiVersion": "2018-06-01",
     "properties": {
         "activities": [
             {
@@ -271,9 +270,5 @@
         },
         "annotations": [],
         "lastPublishTime": "2026-10-08T16:27:27Z"
-    },
-    "dependsOn": [
-        "[concat(variables('factoryId'), '/datasets/SrcPayments')]",
-        "[concat(variables('factoryId'), '/linkedServices/DASPayments')]"
-    ]
+    }
 }
