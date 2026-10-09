@@ -1,0 +1,279 @@
+{
+    "name": "[concat(parameters('factoryName'), '/CleanupRedundantOperationalData')]",
+    "type": "Microsoft.DataFactory/factories/pipelines",
+    "apiVersion": "2018-06-01",
+    "properties": {
+        "activities": [
+            {
+                "name": "CheckPeriodEndRunning",
+                "type": "Lookup",
+                "dependsOn": [
+                    {
+                        "activity": "GetCurrentPeriod",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 1,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": "select\r\nmax(starttime) as starttime\r\nfrom Payments2.job j\r\nwhere j. jobtype = 2\r\nand status in (2,3)\r\nand j.starttime = (select max(starttime) from Payments2.job where jobtype = 2)\r\nand not exists (\r\nselect 1\r\nfrom Payments2.job j2\r\nwhere j2. jobtype = 6\r\nand j2. starttime > j. starttime\r\n)",
+                        "queryTimeout": "00:10:00",
+                        "partitionOption": "None"
+                    },
+                    "dataset": {
+                        "referenceName": "SrcPayments",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "Table_Name": "job"
+                        }
+                    },
+                    "firstRowOnly": true
+                }
+            },
+            {
+                "name": "IsPeriodEndRunning",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "CheckPeriodEndRunning",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@not(empty(activity('CheckPeriodEndRunning').output.firstRow.starttime))",
+                        "type": "Expression"
+                    },
+                    "ifFalseActivities": [
+                        {
+                            "name": "CleanUpEarningEvents",
+                            "type": "Script",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.02:00:00",
+                                "retry": 0,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "linkedServiceName": {
+                                "referenceName": "DASPayments",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "scripts": [
+                                    {
+                                        "type": "NonQuery",
+                                        "text": {
+                                            "value": "/* =============================================================================\n   EarningAuditDataCleanUp.sql\n   ============================================================================= */\n\nSET NOCOUNT ON;\n\n-------------------------------------------------------------------------------\n-- Script set up\n-------------------------------------------------------------------------------\nDECLARE @BatchSize         INT = 1;\nDECLARE @MaxRuntimeMinutes INT = 360;   -- Currently set to 6 hours but override if needed\n\nDECLARE @CurrentCollectionPeriod  VARCHAR(10) = '@{if(empty(pipeline().parameters.CurrentCollectionPeriod), string(activity('GetCurrentPeriod').output.firstRow.CurrentCollectionPeriod), pipeline().parameters.CurrentCollectionPeriod)}';\nDECLARE @CurrentAcademicYear      VARCHAR(10) = '@{if(empty(pipeline().parameters.CurrentAcademicYear), string(activity('GetCurrentPeriod').output.firstRow.CurrentAcademicYear), pipeline().parameters.CurrentAcademicYear)}';\nDECLARE @PreviousCollectionPeriod VARCHAR(10) = NULLIF('@{if(empty(pipeline().parameters.PreviousCollectionPeriod), string(activity('GetCurrentPeriod').output.firstRow.PreviousCollectionPeriod), pipeline().parameters.PreviousCollectionPeriod)}', '');\nDECLARE @PreviousAcademicYear     VARCHAR(10) = NULLIF('@{if(empty(pipeline().parameters.PreviousAcademicYear), string(activity('GetCurrentPeriod').output.firstRow.PreviousAcademicYear), pipeline().parameters.PreviousAcademicYear)}', '');\n\nIF NULLIF(LTRIM(RTRIM(@CurrentCollectionPeriod)), '') IS NULL\n   OR NULLIF(LTRIM(RTRIM(@CurrentAcademicYear)), '') IS NULL\nBEGIN\n    RAISERROR('Set @CurrentCollectionPeriod and @CurrentAcademicYear before running this script.', 16, 1);\n    RETURN;\nEND\n\nDECLARE @RunId    UNIQUEIDENTIFIER = NEWID();\nDECLARE @RunStart DATETIME2        = SYSUTCDATETIME();\nDECLARE @StopBy   DATETIME2        = DATEADD(MINUTE, @MaxRuntimeMinutes, @RunStart);\n\nPRINT CONCAT('EarningAuditDataCleanUp run ', @RunId, ' starting at ', CONVERT(varchar(30), @RunStart, 126));\nPRINT CONCAT('Period scope: current [', @CurrentCollectionPeriod, '/', @CurrentAcademicYear, ']',\n             ' + previous [', ISNULL(@PreviousCollectionPeriod, '-'), '/', ISNULL(@PreviousAcademicYear, '-'), ']');\n\n-------------------------------------------------------------------------------\n-- IDENTIFY ELIGIBLE JOBS\n-------------------------------------------------------------------------------\nIF OBJECT_ID('tempdb..#EligibleJobs') IS NOT NULL DROP TABLE #EligibleJobs;\n\nSELECT distinct JobId INTO #EligibleJobs FROM Payments2.EarningEvent\nWHERE (CollectionPeriod = @CurrentCollectionPeriod AND AcademicYear = @CurrentAcademicYear)\n   OR (CollectionPeriod = @PreviousCollectionPeriod AND AcademicYear = @PreviousAcademicYear);\n\n-- keep all successful jobs\nDELETE FROM #EligibleJobs WHERE JobId IN (SELECT DcJobId FROM Payments2.LatestSuccessfulJobs);\n\n-- keep all in progress, timed-out and failed on DC jobs\nDELETE FROM #EligibleJobs WHERE JobId IN (SELECT DcJobId FROM Payments2.Job WHERE [Status] IN (1, 4, 5));\n\n-- keep any jobs completed our side but DC status is unknown\nDELETE FROM #EligibleJobs WHERE JobId IN (SELECT DcJobId FROM Payments2.Job WHERE [Status] IN (2, 3) AND DCJobSucceeded IS NULL);\n\n-- exclude EAP GSO jobs\nDELETE FROM #EligibleJobs WHERE JobId = 0;\n\n-------------------------------------------------------------------------------\n-- PROCESS EACH ELIGIBLE JOB\n-------------------------------------------------------------------------------\nDECLARE @JobId         BIGINT;\nDECLARE @Count         INT;\nDECLARE @BatchCount    INT = 0;\nDECLARE @SuccessCount  INT = 0;\nDECLARE @FailureCount  INT = 0;\n\nDECLARE JobCursor CURSOR LOCAL FAST_FORWARD FOR\n    SELECT JobId FROM #EligibleJobs ORDER BY JobId;\n\nOPEN JobCursor;\nFETCH NEXT FROM JobCursor INTO @JobId;\n\nWHILE @@FETCH_STATUS = 0\nBEGIN\n    IF SYSUTCDATETIME() >= @StopBy\n    BEGIN\n        PRINT CONCAT('Max runtime of ', @MaxRuntimeMinutes, ' minutes reached - stopping. Remaining JobIds will be picked up on the next run.');\n        BREAK;\n    END\n\n    BEGIN TRY\n        DELETE Payments2.EarningEventPeriod\n        FROM Payments2.EarningEventPeriod AS EEP\n            INNER JOIN Payments2.EarningEvent AS EE ON EEP.EarningEventId = EE.EventId\n        WHERE EE.JobId = @JobId;\n        SET @Count = @@ROWCOUNT;\n        PRINT CONCAT('DELETED ', @Count, ' earningEventPeriods for JobId ', @JobId);\n\n        DELETE Payments2.EarningEventPriceEpisode\n        FROM Payments2.EarningEventPriceEpisode AS EEPE\n            INNER JOIN Payments2.EarningEvent AS EE ON EEPE.EarningEventId = EE.EventId\n        WHERE EE.JobId = @JobId;\n        SET @Count = @@ROWCOUNT;\n        PRINT CONCAT('DELETED ', @Count, ' earningEventPriceEpisodes for JobId ', @JobId);\n\n        DELETE FROM Payments2.EarningEvent WHERE JobId = @JobId;\n        SET @Count = @@ROWCOUNT;\n        PRINT CONCAT('DELETED ', @Count, ' EarningEvents for JobId ', @JobId);\n\n        SET @SuccessCount += 1;\n    END TRY\n    BEGIN CATCH\n        SET @FailureCount += 1;\n        PRINT CONCAT('Error Deleting Audit Data for JobId ', @JobId, ', internal Exception ', ERROR_MESSAGE());\n    END CATCH\n\n    SET @BatchCount += 1;\n\n    IF @BatchCount % @BatchSize = 0\n        PRINT CONCAT(CONVERT(varchar(30), SYSUTCDATETIME(), 126), ' - processed ', @BatchCount, ' JobId(s) so far this run.');\n\n    FETCH NEXT FROM JobCursor INTO @JobId;\nEND\n\nCLOSE JobCursor;\nDEALLOCATE JobCursor;\n\n-------------------------------------------------------------------------------\n-- RUN SUMMARY\n-------------------------------------------------------------------------------\nDECLARE @RunEnd DATETIME2 = SYSUTCDATETIME();\n\nPRINT CONCAT('EarningAuditDataCleanUp run ', @RunId, ' finished at ', CONVERT(varchar(30), @RunEnd, 126),\n             ' (elapsed ', DATEDIFF(SECOND, @RunStart, @RunEnd), 's). ',\n             @SuccessCount, ' JobId(s) processed, ', @FailureCount, ' failed.');",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                ],
+                                "scriptBlockExecutionTimeout": "01:00:00",
+                                "logSettings": {
+                                    "logDestination": "ActivityOutput"
+                                }
+                            }
+                        },
+                        {
+                            "name": "CleanUpDataLocksEvents",
+                            "type": "Script",
+                            "dependsOn": [
+                                {
+                                    "activity": "CleanUpEarningEvents",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.02:00:00",
+                                "retry": 0,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "linkedServiceName": {
+                                "referenceName": "DASPayments",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "scripts": [
+                                    {
+                                        "type": "NonQuery",
+                                        "text": {
+                                            "value": "/* =============================================================================\n   DataLockAuditDataCleanUp.sql\n   ============================================================================= */\n\nSET NOCOUNT ON;\n\n-------------------------------------------------------------------------------\n-- Script set up\n-------------------------------------------------------------------------------\nDECLARE @BatchSize         INT = 1;\nDECLARE @MaxRuntimeMinutes INT = 360;   -- Currently set to 6 hours but override if needed\n\nDECLARE @CurrentCollectionPeriod  VARCHAR(10) = '@{if(empty(pipeline().parameters.CurrentCollectionPeriod), string(activity('GetCurrentPeriod').output.firstRow.CurrentCollectionPeriod), pipeline().parameters.CurrentCollectionPeriod)}';\nDECLARE @CurrentAcademicYear      VARCHAR(10) = '@{if(empty(pipeline().parameters.CurrentAcademicYear), string(activity('GetCurrentPeriod').output.firstRow.CurrentAcademicYear), pipeline().parameters.CurrentAcademicYear)}';\nDECLARE @PreviousCollectionPeriod VARCHAR(10) = NULLIF('@{if(empty(pipeline().parameters.PreviousCollectionPeriod), string(activity('GetCurrentPeriod').output.firstRow.PreviousCollectionPeriod), pipeline().parameters.PreviousCollectionPeriod)}', '');\nDECLARE @PreviousAcademicYear     VARCHAR(10) = NULLIF('@{if(empty(pipeline().parameters.PreviousAcademicYear), string(activity('GetCurrentPeriod').output.firstRow.PreviousAcademicYear), pipeline().parameters.PreviousAcademicYear)}', '');\n\nIF NULLIF(LTRIM(RTRIM(@CurrentCollectionPeriod)), '') IS NULL\n   OR NULLIF(LTRIM(RTRIM(@CurrentAcademicYear)), '') IS NULL\nBEGIN\n    RAISERROR('Set @CurrentCollectionPeriod and @CurrentAcademicYear before running this script.', 16, 1);\n    RETURN;\nEND\n\nDECLARE @RunId    UNIQUEIDENTIFIER = NEWID();\nDECLARE @RunStart DATETIME2        = SYSUTCDATETIME();\nDECLARE @StopBy   DATETIME2        = DATEADD(MINUTE, @MaxRuntimeMinutes, @RunStart);\n\nPRINT CONCAT('DataLockAuditDataCleanUp run ', @RunId, ' starting at ', CONVERT(varchar(30), @RunStart, 126));\nPRINT CONCAT('Period scope: current [', @CurrentCollectionPeriod, '/', @CurrentAcademicYear, ']',\n             ' + previous [', ISNULL(@PreviousCollectionPeriod, '-'), '/', ISNULL(@PreviousAcademicYear, '-'), ']');\n\n-------------------------------------------------------------------------------\n-- IDENTIFY ELIGIBLE JOBS\n-------------------------------------------------------------------------------\nIF OBJECT_ID('tempdb..#EligibleJobs') IS NOT NULL DROP TABLE #EligibleJobs;\n\nSELECT distinct JobId INTO #EligibleJobs FROM Payments2.DataLockEvent\nWHERE (CollectionPeriod = @CurrentCollectionPeriod AND AcademicYear = @CurrentAcademicYear)\n   OR (CollectionPeriod = @PreviousCollectionPeriod AND AcademicYear = @PreviousAcademicYear);\n\n-- keep all successful jobs\nDELETE FROM #EligibleJobs WHERE JobId IN (SELECT DcJobId FROM Payments2.LatestSuccessfulJobs);\n\n-- keep all in progress, timed-out and failed on DC jobs\nDELETE FROM #EligibleJobs WHERE JobId IN (SELECT DcJobId FROM Payments2.Job WHERE [Status] IN (1, 4, 5));\n\n-- keep any jobs completed our side but DC status is unknown\nDELETE FROM #EligibleJobs WHERE JobId IN (SELECT DcJobId FROM Payments2.Job WHERE [Status] IN (2, 3) AND DCJobSucceeded IS NULL);\n\n-- exclude EAP GSO jobs\nDELETE FROM #EligibleJobs WHERE JobId = 0;\n\n-------------------------------------------------------------------------------\n-- PROCESS EACH ELIGIBLE JOB\n-------------------------------------------------------------------------------\nDECLARE @JobId         BIGINT;\nDECLARE @Count         INT;\nDECLARE @BatchCount    INT = 0;\nDECLARE @SuccessCount  INT = 0;\nDECLARE @FailureCount  INT = 0;\n\nDECLARE JobCursor CURSOR LOCAL FAST_FORWARD FOR\n    SELECT JobId FROM #EligibleJobs ORDER BY JobId;\n\nOPEN JobCursor;\nFETCH NEXT FROM JobCursor INTO @JobId;\n\nWHILE @@FETCH_STATUS = 0\nBEGIN\n    IF SYSUTCDATETIME() >= @StopBy\n    BEGIN\n        PRINT CONCAT('Max runtime of ', @MaxRuntimeMinutes, ' minutes reached - stopping. Remaining JobIds will be picked up on the next run.');\n        BREAK;\n    END\n\n    BEGIN TRY\n        DELETE Payments2.DataLockEventNonPayablePeriodFailures\n        FROM Payments2.DataLockEventNonPayablePeriodFailures AS DLENPPF\n            INNER JOIN Payments2.DataLockEventNonPayablePeriod AS DLENPP ON DLENPPF.DataLockEventNonPayablePeriodId = DLENPP.DataLockEventNonPayablePeriodId\n            INNER JOIN Payments2.DataLockEvent AS DL ON DLENPP.DataLockEventId = DL.EventId\n        WHERE DL.JobId = @JobId;\n        SET @Count = @@ROWCOUNT;\n        PRINT CONCAT('DELETED ', @Count, ' DataLockEventNonPayablePeriodFailures for JobId ', @JobId);\n\n        DELETE Payments2.DataLockEventNonPayablePeriod\n        FROM Payments2.DataLockEventNonPayablePeriod AS DLENPP\n            INNER JOIN Payments2.DataLockEvent AS DL ON DLENPP.DataLockEventId = DL.EventId\n        WHERE DL.JobId = @JobId;\n        SET @Count = @@ROWCOUNT;\n        PRINT CONCAT('DELETED ', @Count, ' DataLockEventNonPayablePeriods for JobId ', @JobId);\n\n        DELETE Payments2.DataLockEventPayablePeriod\n        FROM Payments2.DataLockEventPayablePeriod AS DLEPP\n            INNER JOIN Payments2.DataLockEvent AS DL ON DLEPP.DataLockEventId = DL.EventId\n        WHERE DL.JobId = @JobId;\n        SET @Count = @@ROWCOUNT;\n        PRINT CONCAT('DELETED ', @Count, ' DataLockEventPayablePeriods for JobId ', @JobId);\n\n        DELETE Payments2.DataLockEventPriceEpisode\n        FROM Payments2.DataLockEventPriceEpisode AS DLEPE\n            INNER JOIN Payments2.DataLockEvent AS DL ON DLEPE.DataLockEventId = DL.EventId\n        WHERE DL.JobId = @JobId;\n        SET @Count = @@ROWCOUNT;\n        PRINT CONCAT('DELETED ', @Count, ' DataLockEventPriceEpisodes for JobId ', @JobId);\n\n        DELETE FROM Payments2.DataLockEvent WHERE JobId = @JobId;\n        SET @Count = @@ROWCOUNT;\n        PRINT CONCAT('DELETED ', @Count, ' DataLockEvents for JobId ', @JobId);\n\n        SET @SuccessCount += 1;\n    END TRY\n    BEGIN CATCH\n        SET @FailureCount += 1;\n        PRINT CONCAT('Error Deleting Audit Data for JobId ', @JobId, ', internal Exception ', ERROR_MESSAGE());\n    END CATCH\n\n    SET @BatchCount += 1;\n\n    IF @BatchCount % @BatchSize = 0\n        PRINT CONCAT(CONVERT(varchar(30), SYSUTCDATETIME(), 126), ' - processed ', @BatchCount, ' JobId(s) so far this run.');\n\n    FETCH NEXT FROM JobCursor INTO @JobId;\nEND\n\nCLOSE JobCursor;\nDEALLOCATE JobCursor;\n\n-------------------------------------------------------------------------------\n-- RUN SUMMARY\n-------------------------------------------------------------------------------\nDECLARE @RunEnd DATETIME2 = SYSUTCDATETIME();\n\nPRINT CONCAT('DataLockAuditDataCleanUp run ', @RunId, ' finished at ', CONVERT(varchar(30), @RunEnd, 126),\n             ' (elapsed ', DATEDIFF(SECOND, @RunStart, @RunEnd), 's). ',\n             @SuccessCount, ' JobId(s) processed, ', @FailureCount, ' failed.');\n",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                ],
+                                "scriptBlockExecutionTimeout": "01:00:00",
+                                "logSettings": {
+                                    "logDestination": "ActivityOutput"
+                                }
+                            }
+                        },
+                        {
+                            "name": "CleanUpRequiredPaymentEvents",
+                            "type": "Script",
+                            "dependsOn": [
+                                {
+                                    "activity": "CleanUpDataLocksEvents",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.02:00:00",
+                                "retry": 0,
+                                "retryIntervalInSeconds": 60,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "linkedServiceName": {
+                                "referenceName": "DASPayments",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "scripts": [
+                                    {
+                                        "type": "NonQuery",
+                                        "text": {
+                                            "value": "/* =============================================================================\n   RequiredPaymentAuditDataCleanUp.sql\n   ============================================================================= */\n\nSET NOCOUNT ON;\n\n-------------------------------------------------------------------------------\n-- Script set up\n-------------------------------------------------------------------------------\nDECLARE @BatchSize         INT = 1;\nDECLARE @MaxRuntimeMinutes INT = 360;   -- Currently set to 6 hours but override if needed\n\nDECLARE @CurrentCollectionPeriod  VARCHAR(10) = '@{if(empty(pipeline().parameters.CurrentCollectionPeriod), string(activity('GetCurrentPeriod').output.firstRow.CurrentCollectionPeriod), pipeline().parameters.CurrentCollectionPeriod)}';\nDECLARE @CurrentAcademicYear      VARCHAR(10) = '@{if(empty(pipeline().parameters.CurrentAcademicYear), string(activity('GetCurrentPeriod').output.firstRow.CurrentAcademicYear), pipeline().parameters.CurrentAcademicYear)}';\nDECLARE @PreviousCollectionPeriod VARCHAR(10) = NULLIF('@{if(empty(pipeline().parameters.PreviousCollectionPeriod), string(activity('GetCurrentPeriod').output.firstRow.PreviousCollectionPeriod), pipeline().parameters.PreviousCollectionPeriod)}', '');\nDECLARE @PreviousAcademicYear     VARCHAR(10) = NULLIF('@{if(empty(pipeline().parameters.PreviousAcademicYear), string(activity('GetCurrentPeriod').output.firstRow.PreviousAcademicYear), pipeline().parameters.PreviousAcademicYear)}', '');\n\nIF NULLIF(LTRIM(RTRIM(@CurrentCollectionPeriod)), '') IS NULL\n   OR NULLIF(LTRIM(RTRIM(@CurrentAcademicYear)), '') IS NULL\nBEGIN\n    RAISERROR('Set @CurrentCollectionPeriod and @CurrentAcademicYear before running this script.', 16, 1);\n    RETURN;\nEND\n\nDECLARE @RunId    UNIQUEIDENTIFIER = NEWID();\nDECLARE @RunStart DATETIME2        = SYSUTCDATETIME();\nDECLARE @StopBy   DATETIME2        = DATEADD(MINUTE, @MaxRuntimeMinutes, @RunStart);\n\nPRINT CONCAT('RequiredPaymentAuditDataCleanUp run ', @RunId, ' starting at ', CONVERT(varchar(30), @RunStart, 126));\nPRINT CONCAT('Period scope: current [', @CurrentCollectionPeriod, '/', @CurrentAcademicYear, ']',\n             ' + previous [', ISNULL(@PreviousCollectionPeriod, '-'), '/', ISNULL(@PreviousAcademicYear, '-'), ']');\n\n-------------------------------------------------------------------------------\n-- IDENTIFY ELIGIBLE JOBS\n-------------------------------------------------------------------------------\nIF OBJECT_ID('tempdb..#EligibleJobs') IS NOT NULL DROP TABLE #EligibleJobs;\n\nSELECT JobId INTO #EligibleJobs FROM Payments2.RequiredPaymentEvent\nWHERE (CollectionPeriod = @CurrentCollectionPeriod AND AcademicYear = @CurrentAcademicYear)\n   OR (CollectionPeriod = @PreviousCollectionPeriod AND AcademicYear = @PreviousAcademicYear);\n\n-- keep all successful jobs\nDELETE FROM #EligibleJobs WHERE JobId IN (SELECT DcJobId FROM Payments2.LatestSuccessfulJobs);\n\n-- keep all in progress, timed-out and failed on DC jobs\nDELETE FROM #EligibleJobs WHERE JobId IN (SELECT DcJobId FROM Payments2.Job WHERE [Status] IN (1, 4, 5));\n\n-- keep any jobs completed our side but DC status is unknown\nDELETE FROM #EligibleJobs WHERE JobId IN (SELECT DcJobId FROM Payments2.Job WHERE [Status] IN (2, 3) AND DCJobSucceeded IS NULL);\n\n-- exclude EAP GSO jobs\nDELETE FROM #EligibleJobs WHERE JobId = 0;\n\n-------------------------------------------------------------------------------\n-- PROCESS EACH ELIGIBLE JOB\n-------------------------------------------------------------------------------\nDECLARE @JobId         BIGINT;\nDECLARE @Count         INT;\nDECLARE @BatchCount    INT = 0;\nDECLARE @SuccessCount  INT = 0;\nDECLARE @FailureCount  INT = 0;\n\nDECLARE JobCursor CURSOR LOCAL FAST_FORWARD FOR\n    SELECT JobId FROM #EligibleJobs ORDER BY JobId;\n\nOPEN JobCursor;\nFETCH NEXT FROM JobCursor INTO @JobId;\n\nWHILE @@FETCH_STATUS = 0\nBEGIN\n    IF SYSUTCDATETIME() >= @StopBy\n    BEGIN\n        PRINT CONCAT('Max runtime of ', @MaxRuntimeMinutes, ' minutes reached - stopping. Remaining JobIds will be picked up on the next run.');\n        BREAK;\n    END\n\n    BEGIN TRY\n        DELETE FROM Payments2.RequiredPaymentEvent WHERE JobId = @JobId;\n        SET @Count = @@ROWCOUNT;\n        PRINT CONCAT('DELETED ', @Count, ' RequiredPaymentEvents for JobId ', @JobId);\n\n        SET @SuccessCount += 1;\n    END TRY\n    BEGIN CATCH\n        SET @FailureCount += 1;\n        PRINT CONCAT('Error Deleting Audit Data for JobId ', @JobId, ', internal Exception ', ERROR_MESSAGE());\n    END CATCH\n\n    SET @BatchCount += 1;\n\n    IF @BatchCount % @BatchSize = 0\n        PRINT CONCAT(CONVERT(varchar(30), SYSUTCDATETIME(), 126), ' - processed ', @BatchCount, ' JobId(s) so far this run.');\n\n    FETCH NEXT FROM JobCursor INTO @JobId;\nEND\n\nCLOSE JobCursor;\nDEALLOCATE JobCursor;\n\n-------------------------------------------------------------------------------\n-- RUN SUMMARY\n-------------------------------------------------------------------------------\nDECLARE @RunEnd DATETIME2 = SYSUTCDATETIME();\n\nPRINT CONCAT('RequiredPaymentAuditDataCleanUp run ', @RunId, ' finished at ', CONVERT(varchar(30), @RunEnd, 126),\n             ' (elapsed ', DATEDIFF(SECOND, @RunStart, @RunEnd), 's). ',\n             @SuccessCount, ' JobId(s) processed, ', @FailureCount, ' failed.');",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                ],
+                                "scriptBlockExecutionTimeout": "01:00:00",
+                                "logSettings": {
+                                    "logDestination": "ActivityOutput"
+                                }
+                            }
+                        },
+                        {
+                            "name": "CleanUpFundingSourceEvents",
+                            "type": "Script",
+                            "dependsOn": [
+                                {
+                                    "activity": "CleanUpRequiredPaymentEvents",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.02:00:00",
+                                "retry": 0,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "linkedServiceName": {
+                                "referenceName": "DASPayments",
+                                "type": "LinkedServiceReference"
+                            },
+                            "typeProperties": {
+                                "scripts": [
+                                    {
+                                        "type": "NonQuery",
+                                        "text": {
+                                            "value": "/* =============================================================================\n   FundingSourceAuditDataCleanUp.sql\n   ============================================================================= */\n\nSET NOCOUNT ON;\n\n-------------------------------------------------------------------------------\n-- Script set up\n-------------------------------------------------------------------------------\nDECLARE @BatchSize         INT = 1;\nDECLARE @MaxRuntimeMinutes INT = 360;   -- Currently set to 6 hours but override if needed\n\nDECLARE @CurrentCollectionPeriod  VARCHAR(10) = '@{if(empty(pipeline().parameters.CurrentCollectionPeriod), string(activity('GetCurrentPeriod').output.firstRow.CurrentCollectionPeriod), pipeline().parameters.CurrentCollectionPeriod)}';\nDECLARE @CurrentAcademicYear      VARCHAR(10) = '@{if(empty(pipeline().parameters.CurrentAcademicYear), string(activity('GetCurrentPeriod').output.firstRow.CurrentAcademicYear), pipeline().parameters.CurrentAcademicYear)}';\nDECLARE @PreviousCollectionPeriod VARCHAR(10) = NULLIF('@{if(empty(pipeline().parameters.PreviousCollectionPeriod), string(activity('GetCurrentPeriod').output.firstRow.PreviousCollectionPeriod), pipeline().parameters.PreviousCollectionPeriod)}', '');\nDECLARE @PreviousAcademicYear     VARCHAR(10) = NULLIF('@{if(empty(pipeline().parameters.PreviousAcademicYear), string(activity('GetCurrentPeriod').output.firstRow.PreviousAcademicYear), pipeline().parameters.PreviousAcademicYear)}', '');\n\nIF NULLIF(LTRIM(RTRIM(@CurrentCollectionPeriod)), '') IS NULL\n   OR NULLIF(LTRIM(RTRIM(@CurrentAcademicYear)), '') IS NULL\nBEGIN\n    RAISERROR('Set @CurrentCollectionPeriod and @CurrentAcademicYear before running this script.', 16, 1);\n    RETURN;\nEND\n\nDECLARE @RunId    UNIQUEIDENTIFIER = NEWID();\nDECLARE @RunStart DATETIME2        = SYSUTCDATETIME();\nDECLARE @StopBy   DATETIME2        = DATEADD(MINUTE, @MaxRuntimeMinutes, @RunStart);\n\nPRINT CONCAT('FundingSourceAuditDataCleanUp run ', @RunId, ' starting at ', CONVERT(varchar(30), @RunStart, 126));\nPRINT CONCAT('Period scope: current [', @CurrentCollectionPeriod, '/', @CurrentAcademicYear, ']',\n             ' + previous [', ISNULL(@PreviousCollectionPeriod, '-'), '/', ISNULL(@PreviousAcademicYear, '-'), ']');\n\n-------------------------------------------------------------------------------\n-- IDENTIFY ELIGIBLE JOBS\n-------------------------------------------------------------------------------\nIF OBJECT_ID('tempdb..#EligibleJobs') IS NOT NULL DROP TABLE #EligibleJobs;\n\nSELECT distinct JobId INTO #EligibleJobs FROM Payments2.FundingSourceEvent\nWHERE (CollectionPeriod = @CurrentCollectionPeriod AND AcademicYear = @CurrentAcademicYear)\n   OR (CollectionPeriod = @PreviousCollectionPeriod AND AcademicYear = @PreviousAcademicYear);\n\n-- keep all successful jobs\nDELETE FROM #EligibleJobs WHERE JobId IN (SELECT DcJobId FROM Payments2.LatestSuccessfulJobs);\n\n-- keep all in progress, timed-out and failed on DC jobs\nDELETE FROM #EligibleJobs WHERE JobId IN (SELECT DcJobId FROM Payments2.Job WHERE [Status] IN (1, 4, 5));\n\n-- keep any jobs completed our side but DC status is unknown\nDELETE FROM #EligibleJobs WHERE JobId IN (SELECT DcJobId FROM Payments2.Job WHERE [Status] IN (2, 3) AND DCJobSucceeded IS NULL);\n\n-- exclude EAP GSO jobs\nDELETE FROM #EligibleJobs WHERE JobId = 0;\n\n-------------------------------------------------------------------------------\n-- PROCESS EACH ELIGIBLE JOB\n-------------------------------------------------------------------------------\nDECLARE @JobId         BIGINT;\nDECLARE @Count         INT;\nDECLARE @BatchCount    INT = 0;\nDECLARE @SuccessCount  INT = 0;\nDECLARE @FailureCount  INT = 0;\n\nDECLARE JobCursor CURSOR LOCAL FAST_FORWARD FOR\n    SELECT JobId FROM #EligibleJobs ORDER BY JobId;\n\nOPEN JobCursor;\nFETCH NEXT FROM JobCursor INTO @JobId;\n\nWHILE @@FETCH_STATUS = 0\nBEGIN\n    IF SYSUTCDATETIME() >= @StopBy\n    BEGIN\n        PRINT CONCAT('Max runtime of ', @MaxRuntimeMinutes, ' minutes reached - stopping. Remaining JobIds will be picked up on the next run.');\n        BREAK;\n    END\n\n    BEGIN TRY\n        DELETE FROM Payments2.FundingSourceEvent\n        WHERE JobId = @JobId AND (FundingPlatformType = 1 OR FundingPlatformType IS NULL);\n        SET @Count = @@ROWCOUNT;\n        PRINT CONCAT('DELETED ', @Count, ' FundingSourceEvents for JobId ', @JobId);\n\n        SET @SuccessCount += 1;\n    END TRY\n    BEGIN CATCH\n        SET @FailureCount += 1;\n        PRINT CONCAT('Error Deleting Audit Data for JobId ', @JobId, ', internal Exception ', ERROR_MESSAGE());\n    END CATCH\n\n    SET @BatchCount += 1;\n\n    IF @BatchCount % @BatchSize = 0\n        PRINT CONCAT(CONVERT(varchar(30), SYSUTCDATETIME(), 126), ' - processed ', @BatchCount, ' JobId(s) so far this run.');\n\n    FETCH NEXT FROM JobCursor INTO @JobId;\nEND\n\nCLOSE JobCursor;\nDEALLOCATE JobCursor;\n\n-------------------------------------------------------------------------------\n-- RUN SUMMARY\n-------------------------------------------------------------------------------\nDECLARE @RunEnd DATETIME2 = SYSUTCDATETIME();\n\nPRINT CONCAT('FundingSourceAuditDataCleanUp run ', @RunId, ' finished at ', CONVERT(varchar(30), @RunEnd, 126),\n             ' (elapsed ', DATEDIFF(SECOND, @RunStart, @RunEnd), 's). ',\n             @SuccessCount, ' JobId(s) processed, ', @FailureCount, ' failed.');\n",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                ],
+                                "scriptBlockExecutionTimeout": "01:00:00",
+                                "logSettings": {
+                                    "logDestination": "ActivityOutput"
+                                }
+                            }
+                        }
+                    ],
+                    "ifTrueActivities": [
+                        {
+                            "name": "FailPeriodEndRunning",
+                            "description": "",
+                            "type": "Fail",
+                            "dependsOn": [],
+                            "userProperties": [],
+                            "typeProperties": {
+                                "message": "Can not run during period end",
+                                "errorCode": "PeriodEndRunning"
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "GetCurrentPeriod",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:10:00",
+                    "retry": 1,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": "select\r\n    c.AcademicYear as CurrentAcademicYear,\r\n    c.CollectionPeriod as CurrentCollectionPeriod,\r\n    isnull(cast(p.AcademicYear as varchar(10)), '') as PreviousAcademicYear,\r\n    isnull(cast(p.CollectionPeriod as varchar(10)), '') as PreviousCollectionPeriod\r\nfrom (\r\n    select top 1 j.AcademicYear, j.CollectionPeriod\r\n    from Payments2.Job j\r\n    where JobType = 1\r\n    order by j.AcademicYear desc, j.CollectionPeriod desc\r\n) c\r\nouter apply (\r\n    select top 1 j.AcademicYear, j.CollectionPeriod\r\n    from Payments2.Job j\r\n    where j.JobType = 1\r\n    and j.AcademicYear < c.AcademicYear\r\n    order by j.AcademicYear desc, j.CollectionPeriod desc\r\n) last_year\r\nouter apply (\r\n    select last_year.AcademicYear, last_year.CollectionPeriod\r\n    where last_year.AcademicYear is not null\r\n    and not exists (\r\n        select 1\r\n        from Payments2.Job s\r\n        where s.JobType = 6\r\n        and s.AcademicYear = last_year.AcademicYear\r\n        and s.CollectionPeriod = last_year.CollectionPeriod\r\n    )\r\n) p",
+                        "queryTimeout": "00:05:00",
+                        "partitionOption": "None"
+                    },
+                    "dataset": {
+                        "referenceName": "SrcPayments",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "Table_Name": "job"
+                        }
+                    }
+                }
+            }
+        ],
+        "policy": {
+            "elapsedTimeMetric": {}
+        },
+        "parameters": {
+            "CurrentCollectionPeriod": {
+                "type": "string"
+            },
+            "CurrentAcademicYear": {
+                "type": "string"
+            },
+            "PreviousCollectionPeriod": {
+                "type": "string"
+            },
+            "PreviousAcademicYear": {
+                "type": "string"
+            }
+        },
+        "annotations": [],
+        "lastPublishTime": "2026-10-08T16:27:27Z"
+    },
+    "dependsOn": [
+        "[concat(variables('factoryId'), '/datasets/SrcPayments')]",
+        "[concat(variables('factoryId'), '/linkedServices/DASPayments')]"
+    ]
+}
