@@ -1,6 +1,7 @@
 {
-    "name": "CleanupRedundantOperationalData",
+    "name": "[concat(parameters('factoryName'), '/CleanupRedundantOperationalData')]",
     "type": "Microsoft.DataFactory/factories/pipelines",
+    "apiVersion": "2018-06-01",
     "properties": {
         "activities": [
             {
@@ -92,14 +93,7 @@
                         {
                             "name": "CleanUpDataLocksEvents",
                             "type": "Script",
-                            "dependsOn": [
-                                {
-                                    "activity": "CleanUpEarningEvents",
-                                    "dependencyConditions": [
-                                        "Succeeded"
-                                    ]
-                                }
-                            ],
+                            "dependsOn": [],
                             "policy": {
                                 "timeout": "0.02:00:00",
                                 "retry": 0,
@@ -131,14 +125,7 @@
                         {
                             "name": "CleanUpRequiredPaymentEvents",
                             "type": "Script",
-                            "dependsOn": [
-                                {
-                                    "activity": "CleanUpDataLocksEvents",
-                                    "dependencyConditions": [
-                                        "Succeeded"
-                                    ]
-                                }
-                            ],
+                            "dependsOn": [],
                             "policy": {
                                 "timeout": "0.02:00:00",
                                 "retry": 0,
@@ -170,14 +157,7 @@
                         {
                             "name": "CleanUpFundingSourceEvents",
                             "type": "Script",
-                            "dependsOn": [
-                                {
-                                    "activity": "CleanUpRequiredPaymentEvents",
-                                    "dependencyConditions": [
-                                        "Succeeded"
-                                    ]
-                                }
-                            ],
+                            "dependsOn": [],
                             "policy": {
                                 "timeout": "0.02:00:00",
                                 "retry": 0,
@@ -256,23 +236,23 @@
         },
         "parameters": {
             "CurrentCollectionPeriod": {
-                "type": "string",
-                "defaultValue": ""
+                "type": "string"
             },
             "CurrentAcademicYear": {
-                "type": "string",
-                "defaultValue": ""
+                "type": "string"
             },
             "PreviousCollectionPeriod": {
-                "type": "string",
-                "defaultValue": ""
+                "type": "string"
             },
             "PreviousAcademicYear": {
-                "type": "string",
-                "defaultValue": ""
+                "type": "string"
             }
         },
         "annotations": [],
-        "lastPublishTime": "2026-10-08T16:27:27Z"
-    }
+        "lastPublishTime": "2026-10-09T13:21:54Z"
+    },
+    "dependsOn": [
+        "[concat(variables('factoryId'), '/datasets/SrcPayments')]",
+        "[concat(variables('factoryId'), '/linkedServices/DASPayments')]"
+    ]
 }
