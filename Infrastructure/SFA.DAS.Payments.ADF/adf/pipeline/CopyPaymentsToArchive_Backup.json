@@ -442,6 +442,42 @@
 															"type": "Byte",
 															"physicalType": "tinyint"
 														}
+													},
+													{
+														"source": {
+															"name": "LearningType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														},
+														"sink": {
+															"name": "LearningType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														}
+													},
+													{
+														"source": {
+															"name": "CourseType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														},
+														"sink": {
+															"name": "CourseType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														}
+													},
+													{
+														"source": {
+															"name": "CourseCode",
+															"type": "String",
+															"physicalType": "nvarchar"
+														},
+														"sink": {
+															"name": "CourseCode",
+															"type": "String",
+															"physicalType": "nvarchar"
+														}
 													}
 												],
 												"typeConversion": true,
@@ -1709,6 +1745,42 @@
 															"type": "Byte",
 															"physicalType": "tinyint"
 														}
+													},
+													{
+														"source": {
+															"name": "LearningType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														},
+														"sink": {
+															"name": "LearningType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														}
+													},
+													{
+														"source": {
+															"name": "CourseType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														},
+														"sink": {
+															"name": "CourseType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														}
+													},
+													{
+														"source": {
+															"name": "CourseCode",
+															"type": "String",
+															"physicalType": "nvarchar"
+														},
+														"sink": {
+															"name": "CourseCode",
+															"type": "String",
+															"physicalType": "nvarchar"
+														}
 													}
 												],
 												"typeConversion": true,
@@ -2354,6 +2426,42 @@
 															"type": "Byte",
 															"physicalType": "tinyint"
 														}
+													},
+													{
+														"source": {
+															"name": "LearningType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														},
+														"sink": {
+															"name": "LearningType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														}
+													},
+													{
+														"source": {
+															"name": "CourseType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														},
+														"sink": {
+															"name": "CourseType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														}
+													},
+													{
+														"source": {
+															"name": "CourseCode",
+															"type": "String",
+															"physicalType": "nvarchar"
+														},
+														"sink": {
+															"name": "CourseCode",
+															"type": "String",
+															"physicalType": "nvarchar"
+														}
 													}
 												],
 												"typeConversion": true,
@@ -2731,6 +2839,42 @@
 															"name": "AgeAtStartOfLearning",
 															"type": "Byte",
 															"physicalType": "tinyint"
+														}
+													},
+													{
+														"source": {
+															"name": "LearningType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														},
+														"sink": {
+															"name": "LearningType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														}
+													},
+													{
+														"source": {
+															"name": "CourseType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														},
+														"sink": {
+															"name": "CourseType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														}
+													},
+													{
+														"source": {
+															"name": "CourseCode",
+															"type": "String",
+															"physicalType": "nvarchar"
+														},
+														"sink": {
+															"name": "CourseCode",
+															"type": "String",
+															"physicalType": "nvarchar"
 														}
 													}
 												],
@@ -4360,6 +4504,42 @@
 															"name": "FundingPlatformType",
 															"type": "Byte",
 															"physicalType": "tinyint"
+														}
+													},
+													{
+														"source": {
+															"name": "LearningType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														},
+														"sink": {
+															"name": "LearningType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														}
+													},
+													{
+														"source": {
+															"name": "CourseType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														},
+														"sink": {
+															"name": "CourseType",
+															"type": "Byte",
+															"physicalType": "tinyint"
+														}
+													},
+													{
+														"source": {
+															"name": "CourseCode",
+															"type": "String",
+															"physicalType": "nvarchar"
+														},
+														"sink": {
+															"name": "CourseCode",
+															"type": "String",
+															"physicalType": "nvarchar"
 														}
 													}
 												],
